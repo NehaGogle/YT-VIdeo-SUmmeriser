@@ -1,0 +1,7 @@
+venv/
+.env
+__pycache__/
+*.pyc
+faiss_db/
+*.mp3
+*.mp4
