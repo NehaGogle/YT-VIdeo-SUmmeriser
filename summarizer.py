@@ -4,7 +4,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from groq import Groq
+import assemblyai as aai
 import yt_dlp
 import re
 import os
@@ -32,13 +32,12 @@ def get_transcript_from_captions(video_id):
     except:
         return None
 
-def get_transcript_from_whisper(url):
-    """Captions nahi mile toh Whisper se audio transcribe karo"""
-    tmp_dir = tempfile.mkdtemp()
-    audio_path = os.path.join(tmp_dir, "audio.mp3")
-    
+def get_transcript_from_assemblyai(url):
     try:
-        # Audio download karo
+        aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
+        
+        # Audio download karo temp file mein
+        tmp_dir = tempfile.mkdtemp()
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(tmp_dir, 'audio.%(ext)s'),
@@ -54,47 +53,75 @@ def get_transcript_from_whisper(url):
             ydl.download([url])
         
         # MP3 file dhundo
+        audio_path = None
         for f in os.listdir(tmp_dir):
             if f.endswith('.mp3'):
                 audio_path = os.path.join(tmp_dir, f)
                 break
         
-        # Groq Whisper se transcribe karo
-        client = Groq()
-        with open(audio_path, 'rb') as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio_file,
-                response_format="text"
-            )
+        if not audio_path:
+            return None
+
+        # AssemblyAI ko file bhejo
+        config = aai.TranscriptionConfig(speech_models=[aai.SpeechModel.universal])
+        transcriber = aai.Transcriber(config=config)
+        transcript = transcriber.transcribe(audio_path)
         
-        return transcription
+        if transcript.status == aai.TranscriptStatus.error:
+            print(f"AssemblyAI error: {transcript.error}")
+            return None
+            
+        return transcript.text
         
     except Exception as e:
-        print(f"Whisper error: {e}")
+        print(f"AssemblyAI error: {e}")
         return None
     finally:
         # Cleanup
-        for f in os.listdir(tmp_dir):
-            try:
+        try:
+            for f in os.listdir(tmp_dir):
                 os.remove(os.path.join(tmp_dir, f))
-            except:
-                pass
+        except:
+            pass
+
+def get_audio_url(url):
+    """yt-dlp se audio URL nikalo — download nahi karo"""
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            # Audio URL nikalo
+            if 'url' in info:
+                return info['url']
+            # Formats mein dhundo
+            for fmt in info.get('formats', []):
+                if fmt.get('acodec') != 'none':
+                    return fmt['url']
+        return None
+    except Exception as e:
+        print(f"yt-dlp error: {e}")
+        return None
 
 def summarize_video(url, language="English", length="Medium (10 points)"):
     video_id = get_video_id(url)
     if not video_id:
         return {"success": False, "error": "Invalid YouTube URL!"}
 
-    # Pehle captions try karo
+    # Step 1: Captions try karo
     transcript = get_transcript_from_captions(video_id)
     method = "captions"
-    
-    # Captions nahi mile toh Whisper
+
+    # Step 2: AssemblyAI se try karo
+    # Step 2: AssemblyAI se try karo
     if not transcript:
-        transcript = get_transcript_from_whisper(url)
-        method = "whisper"
-    
+       transcript = get_transcript_from_assemblyai(url)
+       method = "assemblyai"
+
     if not transcript:
         return {"success": False, "error": "Transcript nahi mila! Video private ya unavailable hai."}
 
@@ -109,10 +136,10 @@ def summarize_video(url, language="English", length="Medium (10 points)"):
     Neeche ek YouTube video ka transcript hai.
     Isko {language} mein {length} summarize karo.
     Important points highlight karo.
-    
+
     Transcript:
     {transcript}
-    
+
     Summary:
     """
 
@@ -138,3 +165,5 @@ def summarize_video(url, language="English", length="Medium (10 points)"):
         "transcript": transcript[:2000] + "..." if len(transcript) > 2000 else transcript,
         "method": method
     }
+
+
