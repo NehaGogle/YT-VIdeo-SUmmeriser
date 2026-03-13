@@ -36,53 +36,45 @@ def get_transcript_from_assemblyai(url):
     try:
         aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
         
-        # Audio download karo temp file mein
-        tmp_dir = tempfile.mkdtemp()
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(tmp_dir, 'audio.%(ext)s'),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '128',
-            }],
-            'quiet': True
-        }
+        import platform
+        if platform.system() == "Windows" or os.path.exists("/usr/bin/ffmpeg"):
+            # Local machine — download karke transcribe karo
+            tmp_dir = tempfile.mkdtemp()
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': os.path.join(tmp_dir, 'audio.%(ext)s'),
+                'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '128'}],
+                'quiet': True
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+            
+            audio_path = None
+            for f in os.listdir(tmp_dir):
+                if f.endswith('.mp3'):
+                    audio_path = os.path.join(tmp_dir, f)
+                    break
+            
+            if audio_path:
+                config = aai.TranscriptionConfig(speech_models=[aai.SpeechModel.universal])
+                transcriber = aai.Transcriber(config=config)
+                transcript = transcriber.transcribe(audio_path)
+                if transcript.status == aai.TranscriptStatus.error:
+                    return None
+                return transcript.text
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        
-        # MP3 file dhundo
-        audio_path = None
-        for f in os.listdir(tmp_dir):
-            if f.endswith('.mp3'):
-                audio_path = os.path.join(tmp_dir, f)
-                break
-        
-        if not audio_path:
-            return None
-
-        # AssemblyAI ko file bhejo
+        # Cloud — direct YouTube URL do AssemblyAI ko
         config = aai.TranscriptionConfig(speech_models=[aai.SpeechModel.universal])
         transcriber = aai.Transcriber(config=config)
-        transcript = transcriber.transcribe(audio_path)
-        
+        transcript = transcriber.transcribe(url)
         if transcript.status == aai.TranscriptStatus.error:
-            print(f"AssemblyAI error: {transcript.error}")
+            print(f"Error: {transcript.error}")
             return None
-            
         return transcript.text
-        
+
     except Exception as e:
         print(f"AssemblyAI error: {e}")
         return None
-    finally:
-        # Cleanup
-        try:
-            for f in os.listdir(tmp_dir):
-                os.remove(os.path.join(tmp_dir, f))
-        except:
-            pass
 
 def get_audio_url(url):
     """yt-dlp se audio URL nikalo — download nahi karo"""
